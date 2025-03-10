@@ -1,0 +1,196 @@
+#include <Arduino_FreeRTOS.h>
+
+// 핀 설정
+#define LED_PIN 13
+#define BUTTON_PIN 2
+
+// LED 상태 변수
+volatile bool ledState = false;
+
+// 태스크 핸들 선언
+TaskHandle_t blinkTaskHandle = NULL;
+TaskHandle_t buttonTaskHandle = NULL;
+
+// 인터럽트 서비스 루틴
+void IRAM_ATTR buttonISR() {
+    ledState = !ledState;
+    // 디바운싱 구현을 위한 짧은 지연 - 하드웨어적으로 처리해도 됨
+    // delayMicroseconds(50); // 인터럽트에서는 vTaskDelay 사용 불가
+}
+
+// LED 제어 태스크
+void LedControlTask(void *pvParameters) {
+    // LED 핀 초기화
+    pinMode(LED_PIN, OUTPUT);
+    
+    for (;;) {
+        // LED 상태 적용
+        digitalWrite(LED_PIN, ledState);
+        // 태스크 지연
+        vTaskDelay(pdMS_TO_TICKS(250)); // 250ms 대기 (더 빠른 응답을 위해)
+    }
+}
+
+// 버튼 모니터링 태스크
+void ButtonMonitorTask(void *pvParameters) {
+    // 버튼 핀 초기화
+    pinMode(BUTTON_PIN, INPUT_PULLUP);
+    // 인터럽트 설정
+    attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), buttonISR, FALLING);
+    
+    for (;;) {
+        // Serial.println(ledState ? "LED ON" : "LED OFF"); // 디버깅용 (필요시 주석 해제)
+        vTaskDelay(pdMS_TO_TICKS(100)); // 100ms 간격으로 체크
+    }
+}
+
+void setup() {
+    // 시리얼 통신 초기화
+    Serial.begin(9600); // 더 일반적인 baudrate로 변경
+    Serial.println(F("RTOS LED & Button 예제 시작"));
+    
+    // 태스크 생성
+    xTaskCreate(
+        LedControlTask,        // 태스크 함수
+        "LED Control",         // 태스크 이름
+        128,                   // 스택 크기
+        NULL,                  // 매개변수
+        1,                     // 우선순위
+        &blinkTaskHandle);     // 태스크 핸들
+        
+    xTaskCreate(
+        ButtonMonitorTask,     // 태스크 함수
+        "Button Monitor",      // 태스크 이름
+        128,                   // 스택 크기
+        NULL,                  // 매개변수
+        2,                     // 우선순위
+        &buttonTaskHandle);    // 태스크 핸들
+        
+    // FreeRTOS 스케줄러 시작
+    // vTaskStartScheduler(); // Arduino_FreeRTOS.h에서 자동으로 호출됨
+}
+
+void loop() {
+    // FreeRTOS 사용 시 loop()는 비워둠
+}
+////////////////////////////////////////////////////////////////////////
+
+#include <Arduino_FreeRTOS.h>
+#include <semphr.h>
+
+// 카운터 변수
+volatile int task1Count = 0;
+volatile int task2Count = 0;
+volatile int task3Count = 0;
+
+// 뮤텍스 핸들
+SemaphoreHandle_t xSerialMutex;
+
+// Task1 - 가장 빈번하게 실행
+void Task1(void *pvParameters) {
+    while (1) {
+        if (xSemaphoreTake(xSerialMutex, portMAX_DELAY) == pdTRUE) {
+            Serial.print("Task1 Count: ");
+            Serial.println(task1Count++);
+            xSemaphoreGive(xSerialMutex);
+        }
+        vTaskDelay(pdMS_TO_TICKS(200)); // 200ms 주기로 실행
+    }
+}
+
+// Task2 - 중간 주기로 실행
+void Task2(void *pvParameters) {
+    while (1) {
+        if (xSemaphoreTake(xSerialMutex, portMAX_DELAY) == pdTRUE) {
+            Serial.print("Task2 Count: ");
+            Serial.println(task2Count++);
+            xSemaphoreGive(xSerialMutex);
+        }
+        vTaskDelay(pdMS_TO_TICKS(500)); // 500ms 주기로 실행
+    }
+}
+
+// Task3 - 가장 드물게 실행
+void Task3(void *pvParameters) {
+    while (1) {
+        if (xSemaphoreTake(xSerialMutex, portMAX_DELAY) == pdTRUE) {
+            Serial.print("Task3 Count: ");
+            Serial.println(task3Count++);
+            xSemaphoreGive(xSerialMutex);
+        }
+        vTaskDelay(pdMS_TO_TICKS(800)); // 800ms 주기로 실행
+    }
+}
+
+void setup() {
+    // 시리얼 통신 초기화
+    Serial.begin(9600);
+    
+    // 뮤텍스 생성
+    xSerialMutex = xSemaphoreCreateMutex();
+    
+    // 태스크 생성 - 다른 우선순위로 설정
+    xTaskCreate(Task1, "Task1", 128, NULL, 1, NULL);
+    xTaskCreate(Task2, "Task2", 128, NULL, 2, NULL);
+    xTaskCreate(Task3, "Task3", 128, NULL, 3, NULL);
+}
+
+void loop() {
+    // FreeRTOS 사용 시 loop()는 사용하지 않음
+}
+////////////////////////////////////////////////////////////////////////
+#include <Arduino_FreeRTOS.h>
+#include <semphr.h>
+
+// 시리얼 출력 뮤텍스
+SemaphoreHandle_t xSerialMutex;
+
+// Task1 - "Running" 메시지 출력
+void Task1(void *pvParameters) {
+    while (1) {
+        if (xSemaphoreTake(xSerialMutex, portMAX_DELAY) == pdTRUE) {
+            Serial.println("Task1 Running");
+            xSemaphoreGive(xSerialMutex);
+        }
+        vTaskDelay(pdMS_TO_TICKS(200)); // 200ms 간격으로 실행
+    }
+}
+
+// Task2 - "Working" 메시지 출력
+void Task2(void *pvParameters) {
+    while (1) {
+        if (xSemaphoreTake(xSerialMutex, portMAX_DELAY) == pdTRUE) {
+            Serial.println("Task2 Working");
+            xSemaphoreGive(xSerialMutex);
+        }
+        vTaskDelay(pdMS_TO_TICKS(450)); // 450ms 간격으로 실행
+    }
+}
+
+// Task3 - "Processing" 메시지 출력
+void Task3(void *pvParameters) {
+    while (1) {
+        if (xSemaphoreTake(xSerialMutex, portMAX_DELAY) == pdTRUE) {
+            Serial.println("Task3 Processing");
+            xSemaphoreGive(xSerialMutex);
+        }
+        vTaskDelay(pdMS_TO_TICKS(800)); // 800ms 간격으로 실행
+    }
+}
+
+void setup() {
+    // 시리얼 통신 초기화
+    Serial.begin(9600);
+    
+    // 뮤텍스 생성
+    xSerialMutex = xSemaphoreCreateMutex();
+    
+    // 태스크 생성
+    xTaskCreate(Task1, "Task1", 128, NULL, 1, NULL);
+    xTaskCreate(Task2, "Task2", 128, NULL, 2, NULL);
+    xTaskCreate(Task3, "Task3", 128, NULL, 3, NULL);
+}
+
+void loop() {
+    // FreeRTOS 사용 시 loop()는 사용하지 않음
+}
