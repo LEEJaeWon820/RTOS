@@ -1,0 +1,261 @@
+#include <Arduino.h>
+#include <Arduino_FreeRTOS.h>
+#include <semphr.h>
+
+/*왼쪽 바퀴*/
+#define IN1 11 
+#define IN2 10  
+#define ENR 7
+
+/*오른쪽 바퀴*/
+
+#define IN3 9
+#define IN4 8
+#define ENL 6
+//초음파 센서
+// 왼쪽 센서
+#define SONIC_TRIG_LEFT 34
+#define SONIC_ECHO_LEFT 35
+// 중앙 센서
+#define SONIC_TRIG_CENTER 51
+#define SONIC_ECHO_CENTER 50
+// 오른쪽 센서
+#define SONIC_TRIG_RIGHT 46
+#define SONIC_ECHO_RIGHT 47
+
+// 태스크 핸들러 선언
+TaskHandle_t control_motor_handle;
+TaskHandle_t read_sonar_handle;
+
+// 뮤텍스 선언 (공유 자원 보호)
+SemaphoreHandle_t xDistanceMutex;
+
+// 전역 변수 - 초음파 센서 거리 값
+volatile unsigned long distance_left = 0;
+volatile unsigned long distance_center = 0;
+volatile unsigned long distance_right = 0;
+
+// 함수 선언
+void motor_l(int speed);
+void motor_r(int speed);
+void robot_control(int left_motor_speed, int right_motor_speed);
+void control_motor(void *pvParameters);
+void read_sonar_sensor(void *pvParameters);
+unsigned long get_distance(int trig_pin, int echo_pin);
+
+void setup() 
+{
+    // 시리얼 통신 초기화
+    Serial.begin(9600);
+    
+    // 모터 핀 설정
+    pinMode(IN1, OUTPUT);
+    pinMode(IN2, OUTPUT);
+    pinMode(IN3, OUTPUT);
+    pinMode(IN4, OUTPUT);
+    pinMode(ENL, OUTPUT);
+    pinMode(ENR, OUTPUT);
+    
+    // 초음파 센서 핀 설정
+    pinMode(SONIC_TRIG_LEFT, OUTPUT);
+    pinMode(SONIC_ECHO_LEFT, INPUT);
+    pinMode(SONIC_TRIG_CENTER, OUTPUT);
+    pinMode(SONIC_ECHO_CENTER, INPUT);
+    pinMode(SONIC_TRIG_RIGHT, OUTPUT);
+    pinMode(SONIC_ECHO_RIGHT, INPUT);
+    
+    // 초기에 TRIG 핀을 LOW로 설정
+    digitalWrite(SONIC_TRIG_LEFT, LOW);
+    digitalWrite(SONIC_TRIG_CENTER, LOW);
+    digitalWrite(SONIC_TRIG_RIGHT, LOW);
+    
+    // 뮤텍스 생성
+    xDistanceMutex = xSemaphoreCreateMutex();
+    
+    // read_sonar_sensor 태스크 생성
+    xTaskCreate(
+        read_sonar_sensor,        // 태스크 함수
+        "ReadSonar",              // 태스크 이름
+        128,                      // 스택 크기
+        NULL,                     // 태스크 파라미터
+        1,                        // 태스크 우선순위
+        &read_sonar_handle        // 태스크 핸들러
+    );
+    
+    // control_motor 태스크 생성
+    xTaskCreate(
+        control_motor,            // 태스크 함수
+        "ControlMotor",           // 태스크 이름
+        128,                      // 스택 크기
+        NULL,                     // 태스크 파라미터
+        2,                        // 태스크 우선순위 (높을수록 우선순위 높음)
+        &control_motor_handle     // 태스크 핸들러
+    );
+    
+    // 스케줄러 시작
+    vTaskStartScheduler();
+}
+
+void loop() 
+{
+   
+}
+
+// 초음파 센서로 거리 측정하는 함수
+unsigned long get_distance(int trig_pin, int echo_pin) 
+{
+    // 깨끗한 트리거 신호를 위해 잠시 대기
+    delayMicroseconds(2);
+    
+    // 트리거 신호 발생
+    digitalWrite(trig_pin, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(trig_pin, LOW);
+    
+    // 에코 신호의 지속 시간 측정
+    unsigned long duration = pulseIn(echo_pin, HIGH, 30000); // 30ms 타임아웃 추가
+    
+    // 거리 계산 (음속: 340m/s → 약 29μs/cm, 왕복이므로 58로 나눔)
+    if (duration == 0) 
+    {
+        return 9999; // 에러 상황을 나타내는 큰 값 반환
+    } else 
+    {
+        return duration / 58; // cm로 변환
+    }
+}
+
+// 초음파 센서 읽기 태스크
+void read_sonar_sensor(void *pvParameters) 
+{
+    // 태스크가 시작됨을 알림
+    Serial.println("Sonar Sensor Task Started");
+    
+    // 무한 루프로 실행
+    for (;;) 
+    {
+        // 각 초음파 센서에서 거리 측정
+        unsigned long left = get_distance(SONIC_TRIG_LEFT, SONIC_ECHO_LEFT);
+        unsigned long center = get_distance(SONIC_TRIG_CENTER, SONIC_ECHO_CENTER);
+        unsigned long right = get_distance(SONIC_TRIG_RIGHT, SONIC_ECHO_RIGHT);
+        
+        // 뮤텍스 획득
+        if (xSemaphoreTake(xDistanceMutex, portMAX_DELAY) == pdTRUE) 
+        {
+            // 공유 변수 업데이트
+            distance_left = left;
+            distance_center = center;
+            distance_right = right;
+            
+            // 뮤텍스 해제
+            xSemaphoreGive(xDistanceMutex);
+        }
+        
+        // 거리 출력
+        Serial.print("Left: ");
+        Serial.print(left);
+        Serial.print(" cm, Center: ");
+        Serial.print(center);
+        Serial.print(" cm, Right: ");
+        Serial.print(right);
+        Serial.println(" cm");
+        
+        // 다음 측정까지 대기
+        vTaskDelay(pdMS_TO_TICKS(50)); // 50ms마다 측정
+    }
+}
+
+// 왼쪽 모터 제어 함수
+void motor_l(int speed) 
+{
+    if (speed >= 0) 
+    {
+        digitalWrite(IN1, LOW);
+        digitalWrite(IN2, HIGH);
+        analogWrite(ENL, speed); // 0-255
+    } else 
+    {
+        digitalWrite(IN1, HIGH);
+        digitalWrite(IN2, LOW);
+        analogWrite(ENL, -speed);
+    }
+}
+
+// 오른쪽 모터 제어 함수
+void motor_r(int speed) 
+{
+    if (speed >= 0) 
+    {
+        digitalWrite(IN3, LOW);
+        digitalWrite(IN4, HIGH);
+        analogWrite(ENR, speed); // 0-255
+    } else 
+    {
+        digitalWrite(IN3, HIGH);
+        digitalWrite(IN4, LOW);
+        analogWrite(ENR, -speed);
+    }
+}
+
+// 로봇 제어 함수
+void robot_control(int left_motor_speed, int right_motor_speed) 
+{
+    motor_l(left_motor_speed);
+    motor_r(right_motor_speed);
+}
+
+// 모터 제어 태스크
+void control_motor(void *pvParameters) 
+{
+    // 태스크가 시작됨을 알림
+    Serial.println("Motor Control Task Started");
+    
+    // 무한 루프로 실행
+    for (;;) 
+    {
+        unsigned long left = 0;
+        unsigned long center = 0;
+        unsigned long right = 0;
+        
+        // 뮤텍스 획득
+        if (xSemaphoreTake(xDistanceMutex, portMAX_DELAY) == pdTRUE) 
+        {
+            // 공유 변수 읽기
+            left = distance_left;
+            center = distance_center;
+            right = distance_right;
+            
+            // 뮤텍스 해제
+            xSemaphoreGive(xDistanceMutex);
+        }
+        
+        // 센서 값에 따른 모터 제어 로직 (예시)
+        if (center < 20) 
+        {
+            // 정면에 장애물이 있을 경우 정지
+            Serial.println("Obstacle detected! Stopping");
+            robot_control(0, 0);
+            vTaskDelay(pdMS_TO_TICKS(1000)); // 1초 대기
+            
+            // 좌우 거리 비교 후 회전
+            if (left > right) 
+            {
+                // 왼쪽이 더 넓으면 왼쪽으로 회전
+                Serial.println("Turning left");
+                robot_control(-50, 50);
+            } else 
+            {
+                // 오른쪽이 더 넓으면 오른쪽으로 회전
+                Serial.println("Turning right");
+                robot_control(50, -50);
+            }
+            vTaskDelay(pdMS_TO_TICKS(1000)); // 1초 회전
+        } else 
+        {
+            // 정면에 장애물이 없을 경우 전진
+            Serial.println("Moving forward");
+            robot_control(50, 50);
+            vTaskDelay(pdMS_TO_TICKS(1000)); // 1초 전진
+        }
+    }
+}
