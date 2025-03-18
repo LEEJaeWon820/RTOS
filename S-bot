@@ -1,18 +1,19 @@
 #include <Arduino.h>
 #include <Arduino_FreeRTOS.h>
 #include <semphr.h>
+#include <NewPing.h>
 
-/*왼쪽 바퀴*/
+/*######################################################왼쪽 바퀴*/
 #define IN1 11 
 #define IN2 10  
 #define ENR 7
 
-/*오른쪽 바퀴*/
-
+/*######################################################오른쪽 바퀴*/
 #define IN3 9
 #define IN4 8
-#define ENL 6
-//초음파 센서
+#define ENL 6 
+
+/*######################################################초음파 센서*/
 // 왼쪽 센서
 #define SONIC_TRIG_LEFT 34
 #define SONIC_ECHO_LEFT 35
@@ -22,12 +23,22 @@
 // 오른쪽 센서
 #define SONIC_TRIG_RIGHT 46
 #define SONIC_ECHO_RIGHT 47
+/*######################################################*/
+
+// 최대 측정 거리
+#define MAX_DISTANCE 200
+
+//////////////////////////////////////////
+NewPing sonarLeft(SONIC_TRIG_LEFT, SONIC_ECHO_LEFT, MAX_DISTANCE);
+NewPing sonarCenter(SONIC_TRIG_CENTER, SONIC_ECHO_CENTER, MAX_DISTANCE);
+NewPing sonarRight(SONIC_TRIG_RIGHT, SONIC_ECHO_RIGHT, MAX_DISTANCE);
+//////////////////////////////////////////
 
 // 태스크 핸들러 선언
 TaskHandle_t control_motor_handle;
 TaskHandle_t read_sonar_handle;
 
-// 뮤텍스 선언 (공유 자원 보호)
+// 뮤텍스 선언
 SemaphoreHandle_t xDistanceMutex;
 
 // 전역 변수 - 초음파 센서 거리 값
@@ -40,8 +51,10 @@ void motor_l(int speed);
 void motor_r(int speed);
 void robot_control(int left_motor_speed, int right_motor_speed);
 void control_motor(void *pvParameters);
+
 void read_sonar_sensor(void *pvParameters);
-unsigned long get_distance(int trig_pin, int echo_pin);
+
+//////////////////////////////////////////
 
 void setup() 
 {
@@ -55,19 +68,6 @@ void setup()
     pinMode(IN4, OUTPUT);
     pinMode(ENL, OUTPUT);
     pinMode(ENR, OUTPUT);
-    
-    // 초음파 센서 핀 설정
-    pinMode(SONIC_TRIG_LEFT, OUTPUT);
-    pinMode(SONIC_ECHO_LEFT, INPUT);
-    pinMode(SONIC_TRIG_CENTER, OUTPUT);
-    pinMode(SONIC_ECHO_CENTER, INPUT);
-    pinMode(SONIC_TRIG_RIGHT, OUTPUT);
-    pinMode(SONIC_ECHO_RIGHT, INPUT);
-    
-    // 초기에 TRIG 핀을 LOW로 설정
-    digitalWrite(SONIC_TRIG_LEFT, LOW);
-    digitalWrite(SONIC_TRIG_CENTER, LOW);
-    digitalWrite(SONIC_TRIG_RIGHT, LOW);
     
     // 뮤텍스 생성
     xDistanceMutex = xSemaphoreCreateMutex();
@@ -98,50 +98,28 @@ void setup()
 
 void loop() 
 {
-   
-}
-
-// 초음파 센서로 거리 측정하는 함수
-unsigned long get_distance(int trig_pin, int echo_pin) 
-{
-    // 깨끗한 트리거 신호를 위해 잠시 대기
-    delayMicroseconds(2);
-    
-    // 트리거 신호 발생
-    digitalWrite(trig_pin, HIGH);
-    delayMicroseconds(10);
-    digitalWrite(trig_pin, LOW);
-    
-    // 에코 신호의 지속 시간 측정
-    unsigned long duration = pulseIn(echo_pin, HIGH, 30000); // 30ms 타임아웃 추가
-    
-    // 거리 계산 (음속: 340m/s → 약 29μs/cm, 왕복이므로 58로 나눔)
-    if (duration == 0) 
-    {
-        return 9999; // 에러 상황을 나타내는 큰 값 반환
-    } else 
-    {
-        return duration / 58; // cm로 변환
-    }
+  
 }
 
 // 초음파 센서 읽기 태스크
 void read_sonar_sensor(void *pvParameters) 
 {
-    // 태스크가 시작됨을 알림
     Serial.println("Sonar Sensor Task Started");
     
-    // 무한 루프로 실행
     for (;;) 
     {
-        // 각 초음파 센서에서 거리 측정
-        unsigned long left = get_distance(SONIC_TRIG_LEFT, SONIC_ECHO_LEFT);
-        unsigned long center = get_distance(SONIC_TRIG_CENTER, SONIC_ECHO_CENTER);
-        unsigned long right = get_distance(SONIC_TRIG_RIGHT, SONIC_ECHO_RIGHT);
+        // NewPing 라이브러리를 사용하여 각 초음파 센서에서 거리 측정
+        unsigned long left = sonarLeft.ping_cm();
+        unsigned long center = sonarCenter.ping_cm();
+        unsigned long right = sonarRight.ping_cm();
+        
+        // 0 값(측정 실패)을 큰 값으로 변환
+        if (left == 0) left = 9999;
+        if (center == 0) center = 9999;
+        if (right == 0) right = 9999;
         
         // 뮤텍스 획득
-        if (xSemaphoreTake(xDistanceMutex, portMAX_DELAY) == pdTRUE) 
-        {
+        if (xSemaphoreTake(xDistanceMutex, portMAX_DELAY) == pdTRUE) {
             // 공유 변수 업데이트
             distance_left = left;
             distance_center = center;
@@ -173,7 +151,8 @@ void motor_l(int speed)
         digitalWrite(IN1, LOW);
         digitalWrite(IN2, HIGH);
         analogWrite(ENL, speed); // 0-255
-    } else 
+    } 
+    else 
     {
         digitalWrite(IN1, HIGH);
         digitalWrite(IN2, LOW);
@@ -189,7 +168,9 @@ void motor_r(int speed)
         digitalWrite(IN3, LOW);
         digitalWrite(IN4, HIGH);
         analogWrite(ENR, speed); // 0-255
-    } else 
+    } 
+    
+    else 
     {
         digitalWrite(IN3, HIGH);
         digitalWrite(IN4, LOW);
@@ -207,7 +188,6 @@ void robot_control(int left_motor_speed, int right_motor_speed)
 // 모터 제어 태스크
 void control_motor(void *pvParameters) 
 {
-    // 태스크가 시작됨을 알림
     Serial.println("Motor Control Task Started");
     
     // 무한 루프로 실행
@@ -229,7 +209,7 @@ void control_motor(void *pvParameters)
             xSemaphoreGive(xDistanceMutex);
         }
         
-        // 센서 값에 따른 모터 제어 로직 (예시)
+
         if (center < 20) 
         {
             // 정면에 장애물이 있을 경우 정지
@@ -250,7 +230,8 @@ void control_motor(void *pvParameters)
                 robot_control(50, -50);
             }
             vTaskDelay(pdMS_TO_TICKS(1000)); // 1초 회전
-        } else 
+        } 
+        else 
         {
             // 정면에 장애물이 없을 경우 전진
             Serial.println("Moving forward");
