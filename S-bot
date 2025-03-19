@@ -322,7 +322,7 @@ void read_sonar_sensor(void *pvParameters)
 
     digitalWrite(DEBUG_PIN_SONAR, LOW);
 
-    vTaskDelay(pdMS_TO_TICKS(50));
+    vTaskDelay(pdMS_TO_TICKS(70));
   }
 }
 
