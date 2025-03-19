@@ -28,7 +28,10 @@
 #define DEBUG_PIN_MOTOR 27
 
 // 디버깅 활성화 변수 0(비활성화) / 1(활성화)
-volatile int debugging_enabled = 1;
+volatile int debugging_enabled = 0;
+volatile int debugging_enabled_print = 0;
+volatile int debugging_enabled_line_sensor = 0;
+volatile int debugging_enabled_sonar = 0;
 
 NewPing sonarLeft(SONIC_TRIG_LEFT, SONIC_ECHO_LEFT, MAX_DISTANCE);
 NewPing sonarCenter(SONIC_TRIG_CENTER, SONIC_ECHO_CENTER, MAX_DISTANCE);
@@ -52,7 +55,7 @@ volatile unsigned long distance_right = 0;
 
 void debug_print(const char* message) 
 {
-  if (debugging_enabled) 
+  if (debugging_enabled && debugging_enabled_print) 
   {
     if (xSemaphoreTake(xSerialMutex, portMAX_DELAY) == pdTRUE) 
     {
@@ -64,7 +67,7 @@ void debug_print(const char* message)
 
 void debug_print_line_sensor(int* sensorData, int count, int lineType) 
 {
-  if (debugging_enabled) 
+  if (debugging_enabled && debugging_enabled_line_sensor) 
   {
     if (xSemaphoreTake(xSerialMutex, portMAX_DELAY) == pdTRUE) 
     {
@@ -86,7 +89,7 @@ void debug_print_line_sensor(int* sensorData, int count, int lineType)
 
 void debug_print_sonar(int left, int center, int right) 
 {
-  if (debugging_enabled) 
+  if (debugging_enabled && debugging_enabled_sonar) 
   {
     if (xSemaphoreTake(xSerialMutex, portMAX_DELAY) == pdTRUE) 
     {
@@ -315,11 +318,11 @@ void read_sonar_sensor(void *pvParameters)
       xSemaphoreGive(xDistanceMutex);
     }
 
-    //debug_print_sonar(left, center, right);
+    debug_print_sonar(left, center, right);
 
     digitalWrite(DEBUG_PIN_SONAR, LOW);
 
-    vTaskDelay(pdMS_TO_TICKS(25));
+    vTaskDelay(pdMS_TO_TICKS(50));
   }
 }
 
@@ -394,7 +397,9 @@ void control_motor(void *pvParameters)
       line_following(current_line_type);
 
       if (debugging_enabled) {
-        if (xSemaphoreTake(xSerialMutex, portMAX_DELAY) == pdTRUE) {
+        if (xSemaphoreTake(xSerialMutex, portMAX_DELAY) == pdTRUE) 
+        {
+          /*
           Serial.print("Motor control: Line type = ");
           Serial.print(current_line_type);
           Serial.print(", Sonar = L:");
@@ -403,6 +408,7 @@ void control_motor(void *pvParameters)
           Serial.print(center);
           Serial.print(" R:");
           Serial.println(right);
+          */
           xSemaphoreGive(xSerialMutex);
         }
       }
